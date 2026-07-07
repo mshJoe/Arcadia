@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/capability.json",
+  "identifier": "default",
+  "description": "Default capabilities for the application",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "fs:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "run-mpv",
+          "cmd": "mpv",
+          "args": true
+        }
+      ]
+    }
+  ]
+}

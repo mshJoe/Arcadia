@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* 1. Global modern browser scrollbar lock-in */
+* {
+  scrollbar-width: thin !important;
+  scrollbar-color: #2563eb transparent !important;
+}
+
+/* 2. WebKit / Tauri scrollbar base setup - Fix sizes globally */
+::-webkit-scrollbar {
+  width: 6px !important;         /* Lock vertical scrollbar width */
+  height: 6px !important;        /* Lock horizontal scrollbar height */
+  background: transparent !important; /* Force transparent background always */
+}
+
+/* 3. The moving thumb (The blue line) */
+::-webkit-scrollbar-thumb {
+  background-color: #2563eb !important; /* Solid accent blue (blue-600) */
+  border-radius: 9999px !important;     /* Perfect pill shape */
+  border: none !important;              /* Strip away any hidden borders */
+}
+
+/* 4. Aggressive Hover & Active Prevention - Explicitly disable native growth or scaling */
+::-webkit-scrollbar-thumb:hover, 
+::-webkit-scrollbar-thumb:active {
+  background-color: #2563eb !important; /* Force the exact same color */
+  border: none !important;              /* Absolutely no borders on hover */
+  width: 6px !important;                /* Prevent width expansion */
+  height: 6px !important;               /* Prevent height expansion */
+  transform: none !important;           /* Disable any scaling effects */
+}
+
+/* 5. Complete Track Eradication - Ensure the background path never appears on hover */
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track:hover,
+::-webkit-scrollbar-track:active {
+  background: transparent !important;   /* Always fully transparent */
+  border: none !important;              /* No borders or shadows */
+}
