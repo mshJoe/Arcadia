@@ -135,6 +135,22 @@ npm run tauri build
 
 ---
 
+## 📁 Project Structure
+
+*   `.github/workflows/` — Contains GitHub Actions CI/CD pipelines for multi-platform releases.
+*   `public/` — Static assets and the main entry point.
+*   `src/` — Contains all the React components, styles, and core frontend application logic.
+    *   `assets/` — Images, logos, and UI asset files.
+    *   `api.ts` — Handles all network requests and TMDB API interactions.
+    *   `App.tsx` — Main application component containing the core layout, routing, and state logic.
+    *   `App.css` — Global CSS styling and overrides.
+    *   `main.tsx` — React entry point mapping to the root DOM node.
+*   `src-tauri/` — Contains the Rust backend code, Tauri configuration, and native OS build settings.
+*   `index.html` — The base HTML template served by Vite.
+*   `package.json` — Project dependencies and npm scripts.
+*   `tsconfig.json` — TypeScript compiler options and strict typing rules.
+*   `vite.config.ts` — Vite bundler and development server configurations.
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](../../issues) if you want to contribute.
