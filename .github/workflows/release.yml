@@ -6,10 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   release:
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -47,8 +48,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }} # Uses the pushed tag name
-          releaseName: "Arcadia ${{ github.ref_name }}"
-          releaseBody: "Automated release of Arcadia ${{ github.ref_name }}"
+          tagName: v__VERSION__
+          releaseName: "Arcadia v__VERSION__"
+          releaseBody: "Automated release of Arcadia v__VERSION__"
           releaseDraft: true
           prerelease: false
