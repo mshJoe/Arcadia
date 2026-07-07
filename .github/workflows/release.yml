@@ -48,8 +48,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
+          tagName: ${{ github.ref_name }}
           releaseName: "Arcadia v__VERSION__"
-          releaseBody: "Automated release of Arcadia v__VERSION__"
+          releaseBody: "Automated multi-platform release for Arcadia."
           releaseDraft: true
           prerelease: false
