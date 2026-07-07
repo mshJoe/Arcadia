@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, Film, Tv, LayoutGrid, Sun, Moon, Play, FolderUp, X, RefreshCw, Image as ImageIcon, Settings } from "lucide-react";
+import { Search, Film, Tv, LayoutGrid, Sun, Moon, Play, FolderUp, X, RefreshCw, Image as ImageIcon } from "lucide-react";
 import { searchMovie, getMediaDetails, searchMediaFull, getMediaImages, getGenreNames } from "./api";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readDir } from "@tauri-apps/plugin-fs";
