@@ -15,7 +15,7 @@ export interface MediaItem {
   isUnmatched?: boolean;
 }
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { readDir } from "@tauri-apps/plugin-fs";
+import { readDir, exists } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -38,6 +38,8 @@ export default function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [mediaData, setMediaData] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isFolderAccessible, setIsFolderAccessible] = useState<boolean>(true);
+  const [triggerScan, setTriggerScan] = useState<number>(0);
 
   // Custom Overrides (Persisted)
   const [customMatches, setCustomMatches] = useState<Record<string, { id: number, type: 'tv' | 'movie' }>>(() => {
@@ -106,6 +108,7 @@ export default function App() {
         }
         
         setSetupError(null);
+        setIsFolderAccessible(true);
         localStorage.setItem('rootFolder', selected);
         setSelectedFolderPath(selected);
       }
@@ -122,9 +125,22 @@ export default function App() {
         setSetupError("TMDB API Key is missing. Please add it in Settings.");
         return;
       }
-      setSetupError(null);
+
       setIsLoading(true);
+      setMediaData([]);
+
       try {
+        const folderExists = await exists(selectedFolderPath);
+        if (!folderExists) {
+          setIsFolderAccessible(false);
+          setSetupError(`The folder at "${selectedFolderPath}" is missing or inaccessible.`);
+          setIsLoading(false);
+          return;
+        }
+
+        setIsFolderAccessible(true);
+        setSetupError(null);
+
         const entries = await readDir(selectedFolderPath);
         const folderNames = entries
           .filter(entry => entry.isDirectory)
@@ -210,7 +226,7 @@ export default function App() {
       }
     }
     loadRealData();
-  }, [selectedFolderPath, customMatches, customPosters, tmdbApiKey]);
+  }, [selectedFolderPath, customMatches, customPosters, tmdbApiKey, triggerScan]);
 
   // Modal Fetching Effect
   useEffect(() => {
@@ -417,19 +433,37 @@ export default function App() {
   };
 
 
-  if (!selectedFolderPath) {
+  if (!selectedFolderPath || !isFolderAccessible) {
     return (
       <div className={`min-h-screen flex items-center justify-center font-sans transition-colors duration-300 ${mainBgClass} ${textClass}`}>
         <div className={`w-full max-w-2xl p-16 flex flex-col items-center justify-center border-2 border-dashed ${setupBorderClass} rounded-2xl ${surfaceBgClass}`}>
           <FolderUp className={`w-20 h-20 mb-6 ${textMutedClass}`} strokeWidth={1.5} />
-          <h2 className="text-3xl font-serif tracking-tight mb-3">Select your Movies Library</h2>
-          <p className={`text-base mb-10 ${textMutedClass}`}>Choose the root folder containing your movie subfolders.</p>
-          <button
-            onClick={handleBrowseFolders}
-            className={`px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors duration-200 shadow-md`}
-          >
-            Browse Folders
-          </button>
+          <h2 className="text-3xl font-serif tracking-tight mb-3">
+            {!isFolderAccessible ? "Library Disconnected" : "Select your Movies Library"}
+          </h2>
+          <p className={`text-base mb-10 text-center ${textMutedClass}`}>
+            {!isFolderAccessible 
+              ? `The folder at "${selectedFolderPath}" could not be accessed. Please ensure your external drive is connected or select a new folder.` 
+              : "Choose the root folder containing your movie subfolders."}
+          </p>
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={handleBrowseFolders}
+              className={`px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors duration-200 shadow-md`}
+            >
+              Browse Folders
+            </button>
+            {!isFolderAccessible && (
+              <button
+                onClick={() => setTriggerScan(prev => prev + 1)}
+                className={`px-8 py-4 ${surfaceBgClass} border ${setupBorderClass} hover:${surfaceHoverClass} rounded-lg font-medium transition-colors duration-200 shadow-sm flex items-center`}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`w-5 h-5 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                {isLoading ? 'Retrying...' : 'Retry'}
+              </button>
+            )}
+          </div>
           {setupError && (
             <p className="mt-6 text-sm text-red-400/90 font-medium tracking-wide text-center">
               {setupError}
@@ -502,6 +536,14 @@ export default function App() {
               aria-label="Toggle theme"
             >
               {isDarkMode ? <Sun className={`w-5 h-5 ${accentTextClass}`} /> : <Moon className={`w-5 h-5 ${accentTextClass}`} />}
+            </button>
+            <button
+              onClick={() => setTriggerScan(prev => prev + 1)}
+              className={`p-2 rounded-lg transition-colors duration-200 ${surfaceBgClass} ${surfaceHoverClass} flex items-center justify-center ml-2 disabled:opacity-50`}
+              title="Reload Library"
+              disabled={isLoading}
+            >
+              <RefreshCw className={`w-5 h-5 ${textMutedClass} hover:${accentTextClass} transition-colors ${isLoading ? 'animate-spin text-blue-500' : ''}`} />
             </button>
             <button
               onClick={() => { setTempApiKey(tmdbApiKey); setIsSettingsOpen(true); }}
