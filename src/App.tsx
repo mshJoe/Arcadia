@@ -15,7 +15,6 @@ export interface MediaItem {
   isUnmatched?: boolean;
 }
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { readDir, exists } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
