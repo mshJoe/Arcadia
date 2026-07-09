@@ -1,10 +1,24 @@
 import { useState, useEffect } from "react";
-import { Search, Film, Tv, LayoutGrid, Sun, Moon, Play, FolderUp, X, RefreshCw, Image as ImageIcon } from "lucide-react";
+import { Search, Film, Tv, LayoutGrid, Sun, Moon, Play, FolderUp, X, RefreshCw, Image as ImageIcon, ImageOff, Settings } from "lucide-react";
 import { searchMovie, getMediaDetails, searchMediaFull, getMediaImages, getGenreNames } from "./api";
+
+export interface MediaItem {
+  id: number | string;
+  title: string;
+  year: string;
+  rating: string | number;
+  type: string;
+  poster: string | null;
+  folderName: string;
+  rawGenres: string[];
+  tags: string[];
+  isUnmatched?: boolean;
+}
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readDir } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import logoDark from './assets/logo dark mode.png';
 import logoWhite from './assets/logo white mode.png';
 
@@ -20,9 +34,9 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // Setup & API State
-  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
+  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(() => localStorage.getItem('rootFolder'));
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [mediaData, setMediaData] = useState<any[]>([]);
+  const [mediaData, setMediaData] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Custom Overrides (Persisted)
@@ -44,7 +58,7 @@ export default function App() {
   }, [customPosters]);
 
   // Modal State
-  const [selectedMedia, setSelectedMedia] = useState<any | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [mediaDetails, setMediaDetails] = useState<any | null>(null);
   const [localMediaFiles, setLocalMediaFiles] = useState<string[]>([]);
 
@@ -92,6 +106,7 @@ export default function App() {
         }
         
         setSetupError(null);
+        localStorage.setItem('rootFolder', selected);
         setSelectedFolderPath(selected);
       }
     } catch (error) {
@@ -116,7 +131,7 @@ export default function App() {
           .map(entry => entry.name)
           .filter(name => name && !name.startsWith('.'));
           
-        const fetchedItems = [];
+        const fetchedItems: MediaItem[] = [];
 
         for (const name of folderNames) {
           let data;
@@ -156,6 +171,35 @@ export default function App() {
               rawGenres: rawGenres,
               tags: [mediaType, ratingStr, ...rawGenres.slice(0, 3)]
             });
+          } else {
+            let localPosterUrl = null;
+            try {
+              const fullPath = await join(selectedFolderPath, name);
+              const innerEntries = await readDir(fullPath);
+              const posterEntry = innerEntries.find(e => {
+                const lower = e.name?.toLowerCase();
+                return lower === 'poster.jpg' || lower === 'poster.jpeg' || lower === 'poster.png';
+              });
+              if (posterEntry && posterEntry.name) {
+                const absolutePosterPath = await join(fullPath, posterEntry.name);
+                localPosterUrl = convertFileSrc(absolutePosterPath);
+              }
+            } catch (e) {
+              console.error("Error reading folder for local poster:", e);
+            }
+
+            fetchedItems.push({
+              id: `unmatched-${Date.now()}-${Math.random()}`,
+              title: name,
+              year: 'N/A',
+              rating: 'N/A',
+              type: 'Movie',
+              poster: localPosterUrl,
+              folderName: name,
+              rawGenres: [],
+              tags: ['Unmatched'],
+              isUnmatched: true
+            });
           }
         }
         setMediaData(fetchedItems);
@@ -181,8 +225,10 @@ export default function App() {
       const fetchId = override ? override.id : selectedMedia.id;
       const fetchType = override ? override.type : (selectedMedia.type === 'TV Show' || selectedMedia.type === 'Anime' ? 'tv' : 'movie');
 
-      const details = await getMediaDetails(fetchId, fetchType);
-      if (details) setMediaDetails(details);
+      if (!selectedMedia.isUnmatched) {
+        const details = await getMediaDetails(Number(fetchId), fetchType);
+        if (details) setMediaDetails(details);
+      }
 
       // Scan local files
       try {
@@ -207,6 +253,7 @@ export default function App() {
 
   // Modal Actions
   const handleOpenFixMatch = () => {
+    if (!selectedMedia) return;
     setModalView('fixMatch');
     setFixMatchQuery(selectedMedia.folderName);
     performFixMatchSearch(selectedMedia.folderName);
@@ -218,6 +265,7 @@ export default function App() {
   };
 
   const handleSelectNewMatch = async (result: any) => {
+    if (!selectedMedia) return;
     setCustomMatches(prev => ({ ...prev, [selectedMedia.folderName]: { id: result.id, type: result.media_type } }));
     
     // Inline update
@@ -240,22 +288,25 @@ export default function App() {
       type: mediaType,
       poster: newPoster,
       rawGenres: rawGenres,
-      tags: [mediaType, ratingStr, ...rawGenres.slice(0, 3)]
+      tags: [mediaType, ratingStr, ...rawGenres.slice(0, 3)],
+      isUnmatched: false
     }));
     setModalView('details');
   };
 
   const handleOpenChangePoster = async () => {
+    if (!selectedMedia) return;
     setModalView('changePoster');
     const override = customMatches[selectedMedia.folderName];
     const fetchId = override ? override.id : selectedMedia.id;
     const fetchType = override ? override.type : (selectedMedia.type === 'TV Show' || selectedMedia.type === 'Anime' ? 'tv' : 'movie');
     
-    const images = await getMediaImages(fetchId, fetchType);
+    const images = await getMediaImages(Number(fetchId), fetchType);
     setChangePosterResults(images);
   };
 
   const handleSelectNewPoster = (posterPath: string) => {
+    if (!selectedMedia) return;
     const fullPath = `https://image.tmdb.org/t/p/w500${posterPath}`;
     setCustomPosters(prev => ({ ...prev, [selectedMedia.folderName]: fullPath }));
     setSelectedMedia((prev: any) => ({ ...prev, poster: fullPath }));
@@ -309,6 +360,62 @@ export default function App() {
     }
   }, [activeCategory, mediaData]);
 
+  const renderSettingsModal = () => {
+    if (!isSettingsOpen) return null;
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md p-8" onClick={() => setIsSettingsOpen(false)}>
+        <div 
+          className={`w-full max-w-md p-8 flex flex-col rounded-2xl ${surfaceBgClass} ${textClass} shadow-2xl relative transition-all duration-300`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-serif tracking-tight">Settings</h2>
+            <button onClick={() => setIsSettingsOpen(false)} className={`p-2 rounded-full ${surfaceHoverClass}`}><X className="w-5 h-5" /></button>
+          </div>
+          
+          <div className="mb-6">
+            <label className={`block text-xs uppercase tracking-widest font-bold mb-2 ${textMutedClass}`}>TMDB API Key</label>
+            <input 
+              type="password"
+              value={tempApiKey}
+              onChange={(e) => setTempApiKey(e.target.value)}
+              className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-colors duration-200 ${mainBgClass} ${placeholderClass} border ${tagBorderClass}`}
+              placeholder="Enter your API Key..."
+            />
+            <p className={`text-xs mt-2 ${textMutedClass}`}>Required to fetch movie details and posters.</p>
+          </div>
+
+          <div className="mb-8">
+            <label className={`block text-xs uppercase tracking-widest font-bold mb-2 ${textMutedClass}`}>Library Folder</label>
+            <div className={`w-full px-4 py-3 rounded-xl flex items-center justify-between ${mainBgClass} border ${tagBorderClass}`}>
+              <span className="text-sm truncate mr-4 font-medium opacity-80" dir="rtl">{selectedFolderPath || "Not Selected"}</span>
+              <button 
+                onClick={handleBrowseFolders}
+                className={`text-xs font-medium px-4 py-2 rounded-lg ${accentBgClass} ${accentTextClass} hover:opacity-80 transition-opacity`}
+              >
+                Change
+              </button>
+            </div>
+          </div>
+          
+          <div className="flex justify-end space-x-3 mt-4">
+            <button onClick={() => setIsSettingsOpen(false)} className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${surfaceHoverClass}`}>Cancel</button>
+            <button 
+              onClick={() => {
+                localStorage.setItem('tmdb_api_key', tempApiKey);
+                setTmdbApiKey(tempApiKey);
+                setIsSettingsOpen(false);
+              }} 
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-md"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   if (!selectedFolderPath) {
     return (
@@ -335,46 +442,7 @@ export default function App() {
             Settings
           </button>
         </div>
-        {/* Settings Modal */}
-        {isSettingsOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md p-8" onClick={() => setIsSettingsOpen(false)}>
-            <div 
-              className={`w-full max-w-md p-8 flex flex-col rounded-2xl ${surfaceBgClass} ${textClass} shadow-2xl relative transition-all duration-300`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-serif tracking-tight">Settings</h2>
-                <button onClick={() => setIsSettingsOpen(false)} className={`p-2 rounded-full ${surfaceHoverClass}`}><X className="w-5 h-5" /></button>
-              </div>
-              
-              <div className="mb-6">
-                <label className={`block text-xs uppercase tracking-widest font-bold mb-2 ${textMutedClass}`}>TMDB API Key</label>
-                <input 
-                  type="password"
-                  value={tempApiKey}
-                  onChange={(e) => setTempApiKey(e.target.value)}
-                  className={`w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-colors duration-200 ${mainBgClass} ${placeholderClass} border ${tagBorderClass}`}
-                  placeholder="Enter your API Key..."
-                />
-                <p className={`text-xs mt-2 ${textMutedClass}`}>Required to fetch movie details and posters.</p>
-              </div>
-              
-              <div className="flex justify-end space-x-3 mt-4">
-                <button onClick={() => setIsSettingsOpen(false)} className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${surfaceHoverClass}`}>Cancel</button>
-                <button 
-                  onClick={() => {
-                    localStorage.setItem('tmdb_api_key', tempApiKey);
-                    setTmdbApiKey(tempApiKey);
-                    setIsSettingsOpen(false);
-                  }} 
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-md"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {renderSettingsModal()}
       </div>
     );
   }
@@ -435,6 +503,13 @@ export default function App() {
             >
               {isDarkMode ? <Sun className={`w-5 h-5 ${accentTextClass}`} /> : <Moon className={`w-5 h-5 ${accentTextClass}`} />}
             </button>
+            <button
+              onClick={() => { setTempApiKey(tmdbApiKey); setIsSettingsOpen(true); }}
+              className={`p-2 rounded-lg transition-colors duration-200 ${surfaceBgClass} ${surfaceHoverClass} flex items-center justify-center ml-2`}
+              aria-label="Settings"
+            >
+              <Settings className={`w-5 h-5 ${textMutedClass} hover:${accentTextClass} transition-colors`} />
+            </button>
           </div>
         </header>
 
@@ -472,7 +547,14 @@ export default function App() {
                   className={`group cursor-pointer p-4 rounded-xl ${surfaceBgClass} ${surfaceHoverClass} transition-colors duration-300`}
                 >
                   <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-[#16181d]">
-                    <img src={item.poster} alt={item.title} className="w-full h-full object-cover transition-all duration-500 group-hover:opacity-90 group-hover:scale-105" />
+                    {item.poster ? (
+                      <img src={item.poster} alt={item.title} className="w-full h-full object-cover transition-all duration-500 group-hover:opacity-90 group-hover:scale-105" />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 border border-slate-700/50">
+                        <ImageOff className="w-12 h-12 text-slate-500 mb-2" />
+                        <span className="text-xs text-slate-400 font-medium px-4 text-center truncate w-full">{item.folderName}</span>
+                      </div>
+                    )}
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors duration-300 pointer-events-none" />
                   </div>
                   <div className="mt-5 flex items-baseline justify-between">
@@ -513,8 +595,15 @@ export default function App() {
 
               {/* Left Column: Poster (Always Visible in Modal) */}
               <div className="w-1/3 min-w-[300px] hidden md:block relative bg-[#16181d]">
-                <img src={selectedMedia.poster} alt={selectedMedia.title} className="w-full h-full object-cover transition-opacity duration-300" />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+                {selectedMedia.poster ? (
+                  <img src={selectedMedia.poster} alt={selectedMedia.title} className="w-full h-full object-cover transition-opacity duration-300" />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 border-r border-slate-700/50">
+                    <ImageOff className="w-16 h-16 text-slate-500 mb-4" />
+                    <span className="text-sm text-slate-400 font-medium px-4 text-center">No Poster Available</span>
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none"></div>
               </div>
 
               {/* Right Column: Dynamic Content */}
@@ -535,7 +624,7 @@ export default function App() {
                     <h2 className="text-4xl font-serif tracking-tight mb-2 pr-12">{selectedMedia.title}</h2>
                     
                     <div className="flex items-center flex-wrap gap-4 mb-6">
-                      <span className={`text-sm font-medium ${textMutedClass}`}>{selectedMedia.year}</span>
+                      {!selectedMedia.isUnmatched && <span className={`text-sm font-medium ${textMutedClass}`}>{selectedMedia.year}</span>}
                       <div className="flex gap-2">
                         {selectedMedia.tags.map((tag: string) => (
                           <span key={tag} className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border rounded-full ${tagBorderClass} ${textMutedClass} bg-transparent`}>
@@ -543,7 +632,7 @@ export default function App() {
                           </span>
                         ))}
                       </div>
-                      {mediaDetails?.number_of_seasons && (
+                      {!selectedMedia.isUnmatched && mediaDetails?.number_of_seasons && (
                         <span className={`text-sm font-medium ${textMutedClass}`}>
                           • {mediaDetails.number_of_seasons} Seasons, {mediaDetails.number_of_episodes} Episodes
                         </span>
@@ -551,10 +640,12 @@ export default function App() {
                     </div>
 
                     <p className={`text-base leading-relaxed mb-8 ${textMutedClass}`}>
-                      {mediaDetails ? mediaDetails.overview || "No overview available." : "Fetching details from TMDB..."}
+                      {selectedMedia.isUnmatched 
+                        ? "This local folder could not be matched with TMDB. Click 'Fix Match' to manually search and assign metadata." 
+                        : (mediaDetails ? mediaDetails.overview || "No overview available." : "Fetching details from TMDB...")}
                     </p>
 
-                    {mediaDetails?.credits?.cast && mediaDetails.credits.cast.length > 0 && (
+                    {!selectedMedia.isUnmatched && mediaDetails?.credits?.cast && mediaDetails.credits.cast.length > 0 && (
                       <div className="mb-8">
                         <h3 className={`text-xs uppercase tracking-widest font-bold mb-4 ${textMutedClass}`}>Top Cast</h3>
                         <div className="flex overflow-x-auto space-x-6 pb-2 scrollbar-hide">
@@ -695,6 +786,7 @@ export default function App() {
 
 
       </main>
+      {renderSettingsModal()}
     </div>
   );
 }
