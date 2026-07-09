@@ -18,7 +18,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readDir, exists } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import logoDark from './assets/logo dark mode.png';
 import logoWhite from './assets/logo white mode.png';
 
@@ -39,7 +39,6 @@ export default function App() {
   const [mediaData, setMediaData] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFolderAccessible, setIsFolderAccessible] = useState<boolean>(true);
-  const [triggerScan, setTriggerScan] = useState<number>(0);
 
   // Custom Overrides (Persisted)
   const [customMatches, setCustomMatches] = useState<Record<string, { id: number, type: 'tv' | 'movie' }>>(() => {
@@ -96,11 +95,14 @@ export default function App() {
     try {
       const selected = await openDialog({ directory: true, multiple: false });
       if (selected && typeof selected === 'string') {
-        const entries = await readDir(selected);
-        const folderNames = entries
-          .filter(entry => entry.isDirectory)
-          .map(entry => entry.name)
-          .filter(name => name && !name.startsWith('.'));
+        let entries: string[] = [];
+        try {
+          entries = await invoke<string[]>('scan_local_dir', { path: selected });
+        } catch (e) {
+          setSetupError("Failed to open or read the selected folder.");
+          return;
+        }
+        const folderNames = entries.filter(name => name && !name.startsWith('.'));
           
         if (folderNames.length === 0) {
           setSetupError("No subfolders found. Please select the root folder containing your movie folders.");
@@ -111,6 +113,8 @@ export default function App() {
         setIsFolderAccessible(true);
         localStorage.setItem('rootFolder', selected);
         setSelectedFolderPath(selected);
+        const currentApiKey = localStorage.getItem('tmdb_api_key') || tmdbApiKey;
+        scanDirectory(selected, currentApiKey);
       }
     } catch (error) {
       console.error("Error opening dialog:", error);
@@ -118,115 +122,133 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    async function loadRealData() {
-      if (!selectedFolderPath) return;
-      if (!tmdbApiKey) {
-        setSetupError("TMDB API Key is missing. Please add it in Settings.");
+  const scanDirectory = async (folderPath: string | null | undefined, apiKey: string | null | undefined) => {
+    if (!folderPath || !apiKey) {
+      console.warn(`scanDirectory aborted. folderPath present: ${!!folderPath}, apiKey present: ${!!apiKey}`);
+      if (!apiKey) setSetupError("TMDB API Key is missing. Please add it in Settings.");
+      return;
+    }
+
+    // Ensure state matches the current scan to prevent empty dashboards
+    setSelectedFolderPath(folderPath);
+
+    setIsLoading(true);
+    setMediaData([]);
+
+    try {
+      let entries: string[] = [];
+      try {
+        entries = await invoke<string[]>('scan_local_dir', { path: folderPath });
+      } catch (err) {
+        setIsFolderAccessible(false);
+        setSetupError(`The folder at "${folderPath}" is missing or inaccessible.`);
+        setIsLoading(false);
         return;
       }
 
-      setIsLoading(true);
-      setMediaData([]);
+      setIsFolderAccessible(true);
+      setSetupError(null);
 
-      try {
-        const folderExists = await exists(selectedFolderPath);
-        if (!folderExists) {
-          setIsFolderAccessible(false);
-          setSetupError(`The folder at "${selectedFolderPath}" is missing or inaccessible.`);
-          setIsLoading(false);
-          return;
+      const folderNames = entries.filter(name => name && !name.startsWith('.'));
+        
+      const fetchedItems: MediaItem[] = [];
+
+      // Read current persisted states right before scan to avoid stale closures
+      const currentCustomMatches = JSON.parse(localStorage.getItem('customMatches') || '{}');
+      const currentCustomPosters = JSON.parse(localStorage.getItem('customPosters') || '{}');
+
+      for (const name of folderNames) {
+        let data;
+        const override = currentCustomMatches[name] || customMatches[name];
+        if (override) {
+          data = await getMediaDetails(override.id, override.type);
+          if (data) data.media_type = override.type; // Inject type for standard processing
+        } else {
+          data = await searchMovie(name);
         }
 
-        setIsFolderAccessible(true);
-        setSetupError(null);
-
-        const entries = await readDir(selectedFolderPath);
-        const folderNames = entries
-          .filter(entry => entry.isDirectory)
-          .map(entry => entry.name)
-          .filter(name => name && !name.startsWith('.'));
+        if (data && data.poster_path) {
+          let rawGenres: string[] = [];
+          let isAnime = false;
           
-        const fetchedItems: MediaItem[] = [];
-
-        for (const name of folderNames) {
-          let data;
-          const override = customMatches[name];
-          if (override) {
-            data = await getMediaDetails(override.id, override.type);
-            if (data) data.media_type = override.type; // Inject type for standard processing
-          } else {
-            data = await searchMovie(name);
+          // Extract Genres & Detect Anime
+          if (data.genre_ids) {
+            rawGenres = getGenreNames(data.genre_ids);
+            isAnime = data.origin_country?.includes('JP') && data.genre_ids.includes(16);
+          } else if (data.genres) {
+            rawGenres = data.genres.map((g: any) => g.name);
+            isAnime = data.origin_country?.includes('JP') && data.genres.some((g: any) => g.id === 16);
           }
 
-          if (data && data.poster_path) {
-            let rawGenres: string[] = [];
-            let isAnime = false;
-            
-            // Extract Genres & Detect Anime
-            if (data.genre_ids) {
-              rawGenres = getGenreNames(data.genre_ids);
-              isAnime = data.origin_country?.includes('JP') && data.genre_ids.includes(16);
-            } else if (data.genres) {
-              rawGenres = data.genres.map((g: any) => g.name);
-              isAnime = data.origin_country?.includes('JP') && data.genres.some((g: any) => g.id === 16);
-            }
-
-            const mediaType = isAnime ? 'Anime' : (data.media_type === 'tv' ? 'TV Show' : 'Movie');
-            const finalPoster = customPosters[name] || `https://image.tmdb.org/t/p/w500${data.poster_path}`;
-            const ratingStr = `⭐ ${data.vote_average ? data.vote_average.toFixed(1) : 'N/A'}`;
-            
-            fetchedItems.push({
-              id: data.id,
-              title: data.title || data.name,
-              year: (data.release_date || data.first_air_date || 'N/A').substring(0, 4),
-              rating: data.vote_average ? data.vote_average.toFixed(1) : 'N/A',
-              type: mediaType,
-              poster: finalPoster,
-              folderName: name,
-              rawGenres: rawGenres,
-              tags: [mediaType, ratingStr, ...rawGenres.slice(0, 3)]
+          const mediaType = isAnime ? 'Anime' : (data.media_type === 'tv' ? 'TV Show' : 'Movie');
+          const finalPoster = currentCustomPosters[name] || customPosters[name] || `https://image.tmdb.org/t/p/w500${data.poster_path}`;
+          const ratingStr = `⭐ ${data.vote_average ? data.vote_average.toFixed(1) : 'N/A'}`;
+          
+          fetchedItems.push({
+            id: data.id,
+            title: data.title || data.name,
+            year: (data.release_date || data.first_air_date || 'N/A').substring(0, 4),
+            rating: data.vote_average ? data.vote_average.toFixed(1) : 'N/A',
+            type: mediaType,
+            poster: finalPoster,
+            folderName: name,
+            rawGenres: rawGenres,
+            tags: [mediaType, ratingStr, ...rawGenres.slice(0, 3)]
+          });
+        } else {
+          let localPosterUrl = null;
+          try {
+            const fullPath = await join(folderPath, name);
+            const innerEntries = await invoke<string[]>('scan_local_dir', { path: fullPath });
+            const posterName = innerEntries.find(entryName => {
+              const lower = entryName?.toLowerCase();
+              return lower === 'poster.jpg' || lower === 'poster.jpeg' || lower === 'poster.png';
             });
-          } else {
-            let localPosterUrl = null;
-            try {
-              const fullPath = await join(selectedFolderPath, name);
-              const innerEntries = await readDir(fullPath);
-              const posterEntry = innerEntries.find(e => {
-                const lower = e.name?.toLowerCase();
-                return lower === 'poster.jpg' || lower === 'poster.jpeg' || lower === 'poster.png';
-              });
-              if (posterEntry && posterEntry.name) {
-                const absolutePosterPath = await join(fullPath, posterEntry.name);
-                localPosterUrl = convertFileSrc(absolutePosterPath);
-              }
-            } catch (e) {
-              console.error("Error reading folder for local poster:", e);
+            if (posterName) {
+              const absolutePosterPath = await join(fullPath, posterName);
+              localPosterUrl = convertFileSrc(absolutePosterPath);
             }
-
-            fetchedItems.push({
-              id: `unmatched-${Date.now()}-${Math.random()}`,
-              title: name,
-              year: 'N/A',
-              rating: 'N/A',
-              type: 'Movie',
-              poster: localPosterUrl,
-              folderName: name,
-              rawGenres: [],
-              tags: ['Unmatched'],
-              isUnmatched: true
-            });
+          } catch (e) {
+            console.error("Error reading folder for local poster:", e);
           }
+
+          fetchedItems.push({
+            id: `unmatched-${Date.now()}-${Math.random()}`,
+            title: name,
+            year: 'N/A',
+            rating: 'N/A',
+            type: 'Movie',
+            poster: localPosterUrl,
+            folderName: name,
+            rawGenres: [],
+            tags: ['Unmatched'],
+            isUnmatched: true
+          });
         }
-        setMediaData(fetchedItems);
-      } catch (error) {
-        console.error("Failed to read directory or fetch metadata:", error);
-      } finally {
-        setIsLoading(false);
       }
+      setMediaData(fetchedItems);
+    } catch (error) {
+      console.error("Failed to read directory or fetch metadata:", error);
+    } finally {
+      setIsLoading(false);
     }
-    loadRealData();
-  }, [selectedFolderPath, customMatches, customPosters, tmdbApiKey, triggerScan]);
+  };
+
+  const handleReload = () => {
+    // Read up-to-date values directly from localStorage to guarantee no stale closures
+    const currentFolder = localStorage.getItem('rootFolder');
+    const currentApiKey = localStorage.getItem('tmdb_api_key');
+    scanDirectory(currentFolder, currentApiKey);
+  };
+
+  useEffect(() => {
+    const savedFolder = localStorage.getItem('rootFolder');
+    const savedApiKey = localStorage.getItem('tmdb_api_key');
+    if (savedFolder && savedApiKey) {
+      scanDirectory(savedFolder, savedApiKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customMatches, customPosters, tmdbApiKey]);
 
   // Modal Fetching Effect
   useEffect(() => {
@@ -249,12 +271,12 @@ export default function App() {
       // Scan local files
       try {
         const fullPath = await join(selectedFolderPath, selectedMedia.folderName);
-        const entries = await readDir(fullPath);
+        const entries = await invoke<string[]>('scan_local_dir', { path: fullPath });
         const validExtensions = ['.mp4', '.mkv', '.avi', '.webm'];
         
         const filePromises = entries
-          .filter(e => !e.isDirectory && validExtensions.some(ext => e.name?.toLowerCase().endsWith(ext)))
-          .map(e => join(fullPath, e.name));
+          .filter(name => validExtensions.some(ext => name?.toLowerCase().endsWith(ext)))
+          .map(name => join(fullPath, name));
           
         const files = await Promise.all(filePromises);
         setLocalMediaFiles(files);
@@ -455,7 +477,7 @@ export default function App() {
             </button>
             {!isFolderAccessible && (
               <button
-                onClick={() => setTriggerScan(prev => prev + 1)}
+                onClick={handleReload}
                 className={`px-8 py-4 ${surfaceBgClass} border ${setupBorderClass} hover:${surfaceHoverClass} rounded-lg font-medium transition-colors duration-200 shadow-sm flex items-center`}
                 disabled={isLoading}
               >
@@ -538,7 +560,7 @@ export default function App() {
               {isDarkMode ? <Sun className={`w-5 h-5 ${accentTextClass}`} /> : <Moon className={`w-5 h-5 ${accentTextClass}`} />}
             </button>
             <button
-              onClick={() => setTriggerScan(prev => prev + 1)}
+              onClick={handleReload}
               className={`p-2 rounded-lg transition-colors duration-200 ${surfaceBgClass} ${surfaceHoverClass} flex items-center justify-center ml-2 disabled:opacity-50`}
               title="Reload Library"
               disabled={isLoading}
