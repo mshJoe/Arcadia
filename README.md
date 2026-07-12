@@ -132,6 +132,12 @@ To bundle and lock down native release packages manually on your active OS platf
 ```bash
 npm run tauri build
 ```
+---
+## 📸 Screenshots
+
+![Screenshot 1](screenshots/swappy-20260707-062324.png)
+![Screenshot 2](screenshots/swappy-20260707-062352.png)
+![Screenshot 3](screenshots/swappy-20260707-062430.png)
 
 ---
 
